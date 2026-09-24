@@ -33,7 +33,12 @@ fail() { printf '\n❌ %s\n' "$*" >&2; exit 1; }
 command -v certbot >/dev/null || fail "Brak certbota na tym serwerze."
 command -v dig >/dev/null || { apt-get update -qq && apt-get install -y -qq bind9-dnsutils; }
 
-a_records() { dig +short +time=5 +tries=2 A "$1" "@$2" | sort | tr '\n' ' ' | sed 's/ $//'; }
+# +dnssec (bit DO) celowo: serwery aftermarket.pl mają przed strefą cache, który odpowiedzi bez DO
+# trzyma do pełnego TTL (6 h) po zmianie w panelu; z DO odpowiadają świeżo — i tak pytają
+# resolwery walidujące, w tym Let's Encrypt. Zostawiamy tylko adresy (bez linii RRSIG).
+a_records() {
+    dig +short +dnssec +time=5 +tries=2 A "$1" "@$2" | grep -E '^[0-9]+(\.[0-9]+){3}$' | sort | tr '\n' ' ' | sed 's/ $//'
+}
 
 say "Czekam, aż DNS pokaże ${VPS_IP} dla ${DOMAIN} i www.${DOMAIN} (Ctrl+C przerywa)"
 start=$SECONDS
