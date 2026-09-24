@@ -18,6 +18,7 @@ set -euo pipefail
 REF="${1:-main}"
 RAW="https://raw.githubusercontent.com/bednarczykm/websrocks/${REF}"
 DOMAIN="websrocks.com"
+VPS_IP="89.167.14.46"   # testy idą przez publiczne IP — 127.0.0.1 trafia na tym serwerze do innego vhosta
 WEBROOT="/var/www/websrocks"
 ACME_ROOT="/var/www/certbot"
 DEPLOY_USER="gh-deploy"
@@ -96,8 +97,8 @@ else
     fail "nginx -t nie przeszedł — wyłączyłem vhost websrocks.com, reszta serwera bez zmian."
 fi
 
-say "Test lokalny"
-code="$(curl -s -o /dev/null -w '%{http_code}' -H "Host: ${DOMAIN}" http://127.0.0.1/.well-known/acme-challenge/nie-ma || true)"
+say "Test przez publiczne IP (tak jak sprawdza Let's Encrypt)"
+code="$(curl -s -o /dev/null -w '%{http_code}' -H "Host: ${DOMAIN}" "http://${VPS_IP}/.well-known/acme-challenge/nie-ma" || true)"
 echo "Wyzwania certbota przez nginx: HTTP ${code} (404 = OK, katalog działa)"
 
 printf '\n✅ KROK 1 GOTOWY. Strona pojawi się tu po pierwszym deployu z GitHuba.\n'

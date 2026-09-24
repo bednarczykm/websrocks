@@ -19,7 +19,7 @@ set -euo pipefail
 REF="${1:-main}"
 RAW="https://raw.githubusercontent.com/bednarczykm/websrocks/${REF}"
 DOMAIN="websrocks.com"
-VPS_IP="89.167.14.46"
+VPS_IP="89.167.14.46"   # testy idą przez publiczne IP — 127.0.0.1 trafia na tym serwerze do innego vhosta
 NAMESERVERS=(ns1.aftermarket.pl ns2.aftermarket.pl)
 ACME_ROOT="/var/www/certbot"
 VHOST="/etc/nginx/sites-available/${DOMAIN}"
@@ -57,7 +57,7 @@ say "Test ścieżki wyzwań certbota przez nginx (przed wywołaniem Let's Encryp
 probe="websrocks-probe-$$"
 mkdir -p "${ACME_ROOT}/.well-known/acme-challenge"
 echo "$probe" > "${ACME_ROOT}/.well-known/acme-challenge/${probe}"
-got="$(curl -fsS --max-time 10 -H "Host: ${DOMAIN}" "http://127.0.0.1/.well-known/acme-challenge/${probe}" || true)"
+got="$(curl -fsS --max-time 10 -H "Host: ${DOMAIN}" "http://${VPS_IP}/.well-known/acme-challenge/${probe}" || true)"
 rm -f "${ACME_ROOT}/.well-known/acme-challenge/${probe}"
 [ "$got" = "$probe" ] || fail "nginx nie serwuje ${ACME_ROOT} dla ${DOMAIN} — certbot by nie przeszedł. Daj znać Claude."
 echo "OK."
@@ -90,10 +90,10 @@ certbot renew --dry-run --cert-name "$DOMAIN" --no-random-sleep-on-renew \
     || echo "⚠️  Test odnowienia nie przeszedł — certyfikat działa, ale daj znać Claude."
 
 say "Test strony"
-curl -sS -o /dev/null --max-time 15 --resolve "${DOMAIN}:443:127.0.0.1" \
+curl -sS -o /dev/null --max-time 15 --resolve "${DOMAIN}:443:${VPS_IP}" \
     -w "https://${DOMAIN}/ → HTTP %{http_code}\n" "https://${DOMAIN}/" \
     || echo "⚠️  https://${DOMAIN}/ nie odpowiada poprawnie — daj znać Claude."
-curl -sS -o /dev/null --max-time 15 --resolve "www.${DOMAIN}:443:127.0.0.1" \
+curl -sS -o /dev/null --max-time 15 --resolve "www.${DOMAIN}:443:${VPS_IP}" \
     -w "https://www.${DOMAIN}/ → HTTP %{http_code} → %{redirect_url}\n" "https://www.${DOMAIN}/" \
     || echo "⚠️  https://www.${DOMAIN}/ nie odpowiada poprawnie — daj znać Claude."
 
