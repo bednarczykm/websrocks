@@ -1,0 +1,106 @@
+name: Deploy na VPS
+
+# PR: sprawdzenie strony, skryptów i konfiguracji nginx.
+# Push na main (= merge PR): to samo + wgranie public/ na VPS (rsync przez SSH)
+# i kontrola, że serwer oddaje wgraną wersję.
+# Klucz z sekretu VPS_SSH_KEY może na VPS TYLKO wgrywać pliki do /var/www/websrocks
+# (rrsync w authorized_keys użytkownika gh-deploy) — patrz deploy/vps-setup.sh.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  VPS_HOST: 89.167.14.46
+  VPS_USER: gh-deploy
+  # Publiczny klucz hosta VPS — przypięty, żeby deploy nie poszedł na podstawiony serwer.
+  VPS_HOST_KEY: 89.167.14.46 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMNL1Ql5KIXCibTNUJUPGmnGQWgM8yYx37rhPRNMzThh
+  SITE_DOMAIN: websrocks.com
+
+jobs:
+  check:
+    name: Sprawdzenie
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Odwołania do plików w public/
+        run: python3 .github/scripts/check_site.py
+
+      - name: Skrypty (shellcheck)
+        run: |
+          command -v shellcheck >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck; }
+          shellcheck deploy/*.sh .github/scripts/*.sh
+
+      - name: Konfiguracja nginx (nginx -t na tej samej wersji co VPS)
+        run: |
+          set -euo pipefail
+          certs="$RUNNER_TEMP/letsencrypt/live/websrocks.com"
+          mkdir -p "$certs"
+          openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj "/CN=websrocks.com" \
+            -keyout "$certs/privkey.pem" -out "$certs/fullchain.pem" 2>/dev/null
+          for conf in deploy/nginx/*.conf; do
+            echo "== $conf"
+            docker run --rm \
+              -v "$PWD/$conf:/etc/nginx/conf.d/default.conf:ro" \
+              -v "$RUNNER_TEMP/letsencrypt:/etc/letsencrypt:ro" \
+              nginx:1.24 nginx -t
+          done
+
+  # Runner GitHuba dostaje losowe IP z puli chmury, a fail2ban na VPS bywa, że banuje takie
+  # adresy (incydent 2026-07-20 w eurofrance-opinie). Dlatego 1. próba ma continue-on-error
+  # NA KROKU (outcome zostaje 'failure'), a przy porażce rusza deploy-retry — nowy job =
+  # nowa maszyna = nowe IP. rsync jest idempotentny, więc powtórka niczego nie psuje.
+  deploy:
+    name: Deploy na VPS
+    needs: check
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    concurrency:
+      group: websrocks-deploy
+      cancel-in-progress: false
+    outputs:
+      result: ${{ steps.deploy.outcome }}
+    env:
+      SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Brak sekretu VPS_SSH_KEY
+        if: env.SSH_KEY == ''
+        run: echo "::warning title=deploy::Brak sekretu VPS_SSH_KEY — deploy pominięty (README, krok 0)."
+
+      - name: Wgranie + kontrola
+        id: deploy
+        if: env.SSH_KEY != ''
+        continue-on-error: true
+        run: bash .github/scripts/deploy.sh
+
+      - name: Zaznacz porażkę 1. próby
+        if: steps.deploy.outcome == 'failure'
+        run: echo "::warning title=deploy::1. próba nieudana (typowo IP runnera zbanowane przez fail2ban) — deploy-retry spróbuje z nowej maszyny."
+
+  deploy-retry:
+    name: Deploy na VPS (2. próba, nowe IP)
+    needs: deploy
+    if: needs.deploy.outputs.result == 'failure'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    concurrency:
+      group: websrocks-deploy
+      cancel-in-progress: false
+    env:
+      SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Wgranie + kontrola (2. próba)
+        run: bash .github/scripts/deploy.sh
